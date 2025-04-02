@@ -24,6 +24,9 @@ pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
 
+use crate::mm::{VirtAddr,MapPermission};
+use crate::config::{PAGE_SIZE, PAGE_SIZE_BITS};
+
 /// The task manager, where all the tasks are managed.
 ///
 /// Functions implemented on `TaskManager` deals with all task state transitions
@@ -153,6 +156,86 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// New Add: ==> sys_id_count
+    fn get_syscall_idcount(&self, id: usize) -> usize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_info[id]
+    }
+
+    /// Count the syscall id
+    fn count_syscall(&self, id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_info[id] += 1;
+    }
+
+    /// function -> mmap
+    fn mmap(&self, start: usize, len: usize, port: usize) -> isize {
+
+        if ! VirtAddr::from(start).aligned() || port & !0x7 != 0 || port & 0x7 == 0 {
+            return -1; // no aligned
+        } else if len == 0 {
+            return 0;
+        }
+
+        let page_cnt = (len + PAGE_SIZE -1) / PAGE_SIZE;
+        
+        let vpns: Vec<_> = (0..page_cnt)
+            .map(|i| VirtAddr::from(start + i * PAGE_SIZE).floor())
+           .collect();
+        
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let tcb = &mut inner.tasks[current];
+        if tcb.memory_set.check_one_map(&vpns) {
+            return -1; //some pages already_mmap
+        }
+
+
+        let  map_perm = MapPermission::U
+            | if port & 0b001 != 0 { MapPermission::R } else { MapPermission::empty() }
+            | if port & 0b010 != 0 { MapPermission::W } else { MapPermission::empty() }
+            | if port & 0b100 != 0 { MapPermission::X } else { MapPermission::empty() };
+
+        tcb.memory_set.my_insert_framed_area(
+            VirtAddr::from(start), 
+            VirtAddr::from(start + page_cnt * PAGE_SIZE), 
+            map_perm) // alloc fail will return -1 
+    }
+
+    /// function -> munmap
+    fn munmap(&self, start: usize, len: usize) -> isize {
+        if ! VirtAddr::from(start).aligned() {
+            return -1; // start is no align
+        }
+        let start = start & !((1 << PAGE_SIZE_BITS) - 1);
+
+        let page_cnt = (len + PAGE_SIZE -1) / PAGE_SIZE;
+        if page_cnt == 0 {
+            return 0;
+        }
+       
+        // 生成 VPN 列表
+        let vpns: Vec<_> = (0..page_cnt)
+            .map(|i| VirtAddr::from(start + i * PAGE_SIZE).floor())
+            .collect();
+        
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let tcb = &mut inner.tasks[current];
+
+        if ! tcb.memory_set.check_all_map(&vpns) {
+            // 检查是否都被映射
+            return -1; // no already all mmap
+        }
+
+        tcb.memory_set.my_remove_framed_page(&vpns);
+
+        0      
+    }
+    
 }
 
 /// Run the first task in task list.
@@ -201,4 +284,24 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// New Add: ==> sys_id_count
+pub fn get_syscall_idcount(id: usize) -> usize {
+    TASK_MANAGER.get_syscall_idcount(id)
+}
+
+/// Count the syscall id
+pub fn count_syscall(id: usize) {
+    TASK_MANAGER.count_syscall(id);
+}
+
+/// function -> mmap
+pub fn mmap(start: usize, len: usize, port: usize) -> isize {
+    TASK_MANAGER.mmap(start, len, port)
+}
+
+/// function -> munmap
+pub fn munmap(start: usize, len: usize) -> isize {
+    TASK_MANAGER.munmap(start, len)
 }

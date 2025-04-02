@@ -262,6 +262,61 @@ impl MemorySet {
             false
         }
     }
+
+    /// check_one_map
+    pub fn check_one_map(&self, vpns: &Vec<VirtPageNum>) -> bool {
+        // vpns中只要有一个vpn是有效映射，就返回true
+        vpns.iter().any(|vpn| {
+            self.page_table.translate(*vpn)
+                .map_or(false, |pte| pte.is_valid())
+        })
+    }
+
+    /// check_all_map
+    pub fn check_all_map(&self, vpns: &Vec<VirtPageNum>) -> bool {
+        // vpns中所有vpn都是有效映射，返回true
+        vpns.iter().all(|vpn| {
+            self.page_table.translate(*vpn)
+                .map_or(false, |pte| pte.is_valid())
+        })
+    }
+
+    /// 
+    pub fn my_remove_framed_page(&mut self, vpns: &Vec<VirtPageNum>) {
+        for vpn in vpns.iter() {
+            if let Some(area) = self
+                .areas
+                .iter_mut()
+                .find(|area| area.vpn_range.get_start() == *vpn)
+                {
+                    area.unmap_one(&mut self.page_table, *vpn);
+                }
+        }
+    }
+    /// insert_framed_area
+    pub fn my_insert_framed_area(
+        &mut self,
+        start_va: VirtAddr,
+        end_va: VirtAddr,
+        permission: MapPermission,
+    )  -> isize {
+        self.my_push(
+            MapArea::new(start_va, end_va, MapType::Framed, permission),
+            None,
+        )
+    }
+    /// push
+    fn my_push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) -> isize {
+        if map_area.my_map(&mut self.page_table) == -1 {
+            return -1;
+        }
+        if let Some(data) = data {
+            map_area.copy_data(&mut self.page_table, data);
+        }
+        self.areas.push(map_area);
+
+        0
+    }
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {
@@ -355,6 +410,35 @@ impl MapArea {
             }
             current_vpn.step();
         }
+    }
+    // sys_mmap 4
+    pub fn my_map(&mut self, page_table: &mut PageTable) -> isize {
+        for vpn in self.vpn_range {
+            if self.my_map_one(page_table, vpn) == -1 {
+                return -1;
+            }
+        }
+        0
+    }
+    pub fn my_map_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) -> isize {
+        let ppn: PhysPageNum;
+        match self.map_type {
+            MapType::Identical => {
+                panic!("my_map_one should only use for mmap, MapType must be MapType::Framed");
+            }
+            MapType::Framed => {
+                if let Some(frame) = frame_alloc() {
+                    ppn = frame.ppn;
+                    self.data_frames.insert(vpn, frame);
+                } else {
+                    return -1;
+                }
+            }
+        }
+        let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
+        page_table.map(vpn, ppn, pte_flags);
+
+        0
     }
 }
 
