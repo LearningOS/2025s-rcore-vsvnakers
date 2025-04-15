@@ -105,30 +105,54 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 /// YOUR JOB: get time with second and microsecond
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
-pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
+    // trace!(
+    //     "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
+    //     current_task().unwrap().pid.0
+    // );
+    // -1
+    let us = crate::timer::get_time_us();
+    let timeval = TimeVal {
+        sec: us / 1_000_000,
+        usec: us % 1_000_000,
+    };
+    let mut ptr = &timeval as *const TimeVal as usize;
+
+    let mut buffers = crate::mm::translated_byte_buffer(crate::task::current_user_token(), ts as *const u8, core::mem::size_of::<TimeVal>());
+    for buffer in buffers.iter_mut() {
+        let data = unsafe {core::slice::from_raw_parts(ptr as *const u8, buffer.len()) };
+        ptr += buffer.len();
+
+        buffer.copy_from_slice(data);
+    }
+
+    0
 }
+use crate::task::processor::{mmap, munmap};
 
 /// YOUR JOB: Implement mmap.
 pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    // trace!(
+    //     "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
+    //     current_task().unwrap().pid.0
+    // );
+    // -1
+    
+    //crate::task::mmap(_start, _len, _port)
+    mmap(_start, _len, _port)
 }
 
 /// YOUR JOB: Implement munmap.
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    // trace!(
+    //     "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
+    //     current_task().unwrap().pid.0
+    // );
+    // -1
+
+    //crate::task::munmap(_start, _len)
+    munmap(_start, _len)
+
 }
 
 /// change data segment size
@@ -142,20 +166,62 @@ pub fn sys_sbrk(size: i32) -> isize {
 }
 
 /// YOUR JOB: Implement spawn.
-/// HINT: fork + exec =/= spawn
-pub fn sys_spawn(_path: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+/// HINT: fork + exec =/= spawn 传入字符串指针，成功：返回新进程PID，失败：返回-1
+pub fn sys_spawn(path: *const u8) -> isize {
+    // trace!(
+    //     "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
+    //     current_task().unwrap().pid.0
+    // );
+    // -1
+    trace!("kernel:pid[{}] sys_spawn", current_task().unwrap().pid.0);
+
+    // 获取当前进程 token（页表权限）
+    let token = current_user_token();
+
+    //  获取程序路径字符串
+    let path = translated_str(token, path);
+
+    // 读取程序数据（从文件系统或内存中的 APP 列表）
+    if let Some(data) = get_app_data_by_name(path.as_str()) {
+
+        // 获取当前任务，调用 spawn
+        let cur_task = current_task().unwrap();
+
+        let new_task = cur_task.spawn(data);
+        let new_pid = new_task.pid.0;
+
+        // 添加到调度器
+        add_task(new_task);
+
+        // 返回新进程的 PID
+        new_pid as isize
+    } else {
+        -1
+    }
 }
 
-// YOUR JOB: Set task priority.
-pub fn sys_set_priority(_prio: isize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+// YOUR JOB: Set task priority. 设置当前任务（进程/线程）的调度优先级 
+// 传入优先级值
+// syscall(SYS_set_priority, 3);  // 请求将当前任务优先级设置为 3
+pub fn sys_set_priority(prio: isize) -> isize {
+    // trace!(
+    //     "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
+    //     current_task().unwrap().pid.0
+    // );
+    // -1
+
+    // Check if priority is within valid range
+    if prio >= 2 {
+        // Get current task control block
+        let cur_task = current_task().unwrap();
+
+        // Enter task inner structure to modify priority
+        let mut inner = cur_task.inner_exclusive_access();
+        inner.priority = prio ;
+
+        // Return the new priority as confirmation
+        prio 
+    } else {
+        -1
+    }
 }

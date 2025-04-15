@@ -300,6 +300,72 @@ impl MemorySet {
             false
         }
     }
+
+    /// Check Memory Map Conflicts
+    pub fn already_mmaped(&self, vpns: &Vec<VirtPageNum>) -> bool {
+        // check if the vpns are already mapped in the page table
+        for vpn in vpns.iter() {
+            if let Some(pte) = self.page_table.translate(*vpn) {
+                if pte.is_valid() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Insert a new MapArea into this MemorySet.
+    pub fn my_insert_framed_area(
+        &mut self,
+        start_va: VirtAddr,
+        end_va: VirtAddr,
+        permission: MapPermission,
+    )  -> isize {
+        self.my_push(
+            MapArea::new(start_va, end_va, MapType::Framed, permission),
+            None,
+        )
+    }
+
+    /// Push a new MapArea into this MemorySet.
+    pub fn my_push(
+        &mut self,
+        mut map_area: MapArea,
+        data: Option<&[u8]>,
+    ) -> isize {
+        if map_area.my_map(&mut self.page_table) == -1 {
+            return -1;
+        }
+        if let Some(data) = data {
+            map_area.copy_data(&mut self.page_table, data);
+        }
+        self.areas.push(map_area);
+        0
+    }
+
+    /// Check Memory Map Conflicts
+    pub fn already_all_mmaped(&self, vpns: &Vec<VirtPageNum>) -> bool {
+        // check if the vpns are already mapped in the page table
+        for vpn in vpns.iter() {
+            if let Some(pte) = self.page_table.translate(*vpn) {
+                if !pte.is_valid() {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Remove a MapArea with the given start_vpn.
+pub fn my_remove_framed_page(&mut self, vpns: &Vec<VirtPageNum>) {
+    for vpn in vpns.iter() {
+        if let Some(area) = self.areas.iter_mut().find(
+            |area| *vpn == area.vpn_range.get_start()) {
+                area.unmap_one(&mut self.page_table, *vpn);
+                area.vpn_range = VPNRange::new(VirtPageNum::from((*vpn).0 + 1), area.vpn_range.get_end());
+            }
+    }
+}
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {
@@ -399,6 +465,36 @@ impl MapArea {
             }
             current_vpn.step();
         }
+    }
+
+    pub fn my_map(&mut self, page_table: &mut PageTable) -> isize {
+        for vpn in self.vpn_range {
+            if self.my_map_one(page_table, vpn) == -1 {
+                return -1;
+            }
+        }
+        0
+    }
+
+    pub fn my_map_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) -> isize {
+        let ppn: PhysPageNum;
+        match self.map_type {
+            MapType::Identical => {
+                panic!("my_map_one should only use for mmap, MapType must be MapType::Framed");
+            }
+            MapType::Framed => {
+                if let Some(frame) = frame_alloc() {
+                    ppn = frame.ppn;
+                    self.data_frames.insert(vpn, frame);
+                } else {
+                    return -1;
+                }
+            }
+        }
+        let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
+        page_table.map(vpn, ppn, pte_flags);
+
+        0
     }
 }
 
