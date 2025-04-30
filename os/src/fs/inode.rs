@@ -14,6 +14,8 @@ use bitflags::*;
 use easy_fs::{EasyFileSystem, Inode};
 use lazy_static::*;
 
+use super::{Stat, StatMode};
+
 /// inode in memory
 /// A wrapper around a filesystem inode
 /// to implement File trait atop
@@ -156,4 +158,21 @@ impl File for OSInode {
         }
         total_write_size
     }
+
+    fn get_stat(&self) -> Stat {
+        let inner = self.inner.exclusive_access();
+        let (ino, isfile, nlink) = inner.inode.get_info();
+        let mode = if isfile { StatMode::FILE } else { StatMode::DIR };
+        Stat::new(ino, mode, nlink)
+    }
+}
+
+/// linkat
+pub fn linkat(old_name: &str, new_name: &str) -> isize {
+    ROOT_INODE.linkat(old_name, new_name)
+}
+
+/// unlinkat
+pub fn unlinkat(name: &str) -> isize {
+    ROOT_INODE.unlinkat(name)
 }

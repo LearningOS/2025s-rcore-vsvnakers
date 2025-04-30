@@ -105,30 +105,136 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 /// YOUR JOB: get time with second and microsecond
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
-pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
+    // trace!(
+    //     "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
+    //     current_task().unwrap().pid.0
+    // );
+    // -1
+
+    let us = crate::timer::get_time_us();
+    let timeval = TimeVal {
+        sec: us / 1_000_000,
+        usec: us % 1_000_000,
+    };
+    let mut ptr = &timeval as *const TimeVal as usize;
+
+    let mut buffers = crate::mm::translated_byte_buffer(crate::task::current_user_token(), ts as *const u8, core::mem::size_of::<TimeVal>());
+    for buffer in buffers.iter_mut() {
+        let data = unsafe {core::slice::from_raw_parts(ptr as *const u8, buffer.len()) };
+        ptr += buffer.len();
+
+        buffer.copy_from_slice(data);
+    }
+
+    0
 }
 
 /// YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
+    // trace!(
+    //     "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
+    //     current_task().unwrap().pid.0
+    // );
+    // -1
+
+    use crate::mm::VirtAddr;
+
+    // check args
+    if ! VirtAddr::from(start).aligned() {
+        return -1; // no aligned
+    } else if port & !0x7 != 0 {
+        return -1; // no valid port
+    } else if port & 0x7 == 0 {
+        return -1; // meaningless
+    } else if len == 0 {
+        return 0;
+    }
+
+    // get page cnt
+    let page_cnt;
+    if len % crate::config::PAGE_SIZE == 0 {
+        page_cnt = len / crate::config::PAGE_SIZE;
+    } else {
+        page_cnt = len / crate::config::PAGE_SIZE + 1;
+    }
+    // get map vpns
+    use alloc::vec::Vec;
+    let mut vpns = Vec::new();
+    let mut tmp = start;
+    for _ in 0..page_cnt {
+        vpns.push(VirtAddr::from(tmp).floor());
+        tmp += crate::config::PAGE_SIZE;
+    }
+
+    let tcb = current_task().unwrap();
+    let mut tcb = tcb.inner_exclusive_access();
+    if tcb.memory_set.already_mmap(&vpns) {
+        return -1; //some pages already_mmap
+    }
+
+    // config map_perm
+    use crate::mm::MapPermission;
+    let mut map_perm = MapPermission::U;
+    if port & (1 << 0) != 0 {
+        map_perm |= MapPermission::R;
+    }
+    if port & (1 << 1) != 0 {
+        map_perm |= MapPermission::W;
+    }
+    if port & (1 << 2) != 0 {
+        map_perm |= MapPermission::X;
+    }
+    
+    // insert
+    tcb.memory_set.my_insert_framed_area(
+        VirtAddr::from(start), 
+        VirtAddr::from(start + page_cnt * crate::config::PAGE_SIZE), 
+        map_perm) // alloc fail will return -1 
 }
 
 /// YOUR JOB: Implement munmap.
-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+pub fn sys_munmap(start: usize, len: usize) -> isize {
+    // trace!(
+    //     "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
+    //     current_task().unwrap().pid.0
+    // );
+    // -1
+
+    use crate::mm::VirtAddr;
+    if ! VirtAddr::from(start).aligned() {
+        return -1; // start is no align
+    }
+    let start = start & !((1 << crate::config::PAGE_SIZE_BITS) - 1);
+    let page_cnt;
+    if len % crate::config::PAGE_SIZE == 0 {
+        page_cnt = len / crate::config::PAGE_SIZE;
+    } else {
+        page_cnt = len / crate::config::PAGE_SIZE + 1;
+    }
+    if page_cnt == 0 {
+        return 0; // page cnt is 0
+    }
+
+    // now start is align and page_cnt is ok
+    use alloc::vec::Vec;
+    let mut vpns = Vec::new();
+    let mut tmp = start;
+    for _ in 0..page_cnt {
+        vpns.push(VirtAddr::from(tmp).floor());
+        tmp += crate::config::PAGE_SIZE;
+    }
+    
+    let tcb = current_task().unwrap();
+    let mut tcb = tcb.inner_exclusive_access();
+    if ! tcb.memory_set.already_all_mmap(&vpns) {
+        // 检查是否都被映射
+        return -1; // no already all mmap
+    }
+
+    tcb.memory_set.my_remove_framed_page(&vpns);
+
+    0
 }
 
 /// change data segment size
@@ -143,12 +249,30 @@ pub fn sys_sbrk(size: i32) -> isize {
 
 /// YOUR JOB: Implement spawn.
 /// HINT: fork + exec =/= spawn
-pub fn sys_spawn(_path: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+pub fn sys_spawn(path: *const u8) -> isize {
+    // trace!(
+    //     "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
+    //     current_task().unwrap().pid.0
+    // );
+    // -1
+
+    trace!("kernel:pid[{}] sys_spawn", current_task().unwrap().pid.0);
+
+    let token = current_user_token();
+    let path = translated_str(token, path);
+
+    if let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY) {
+        let all_data = app_inode.read_all();
+        let cur_task = current_task().unwrap();
+
+        let new_task = cur_task.spawn(all_data.as_slice());
+        let new_pid = new_task.pid.0;
+        add_task(new_task); // add new task to scheduler
+        
+        new_pid as isize
+    } else {
+        -1
+    }
 }
 
 // YOUR JOB: Set task priority.

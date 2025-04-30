@@ -76,28 +76,72 @@ pub fn sys_close(fd: usize) -> isize {
 }
 
 /// YOUR JOB: Implement fstat.
-pub fn sys_fstat(_fd: usize, _st: *mut Stat) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_fstat NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+pub fn sys_fstat(fd: usize, st: *mut Stat) -> isize {
+    // trace!(
+    //     "kernel:pid[{}] sys_fstat NOT IMPLEMENTED",
+    //     current_task().unwrap().pid.0
+    // );
+    // -1
+
+    let task = current_task().unwrap();
+    let inner = task.inner_exclusive_access();
+    if fd >= inner.fd_table.len() {
+        return -1;
+    }
+
+    if let Some(file) = &inner.fd_table[fd] {
+        let src_st = file.get_stat();
+        // release current task TCB manually to avoid multi-borrow
+        drop(inner);
+
+        let mut ptr = &src_st as *const Stat as usize;
+
+        let mut buffers = 
+            crate::mm::translated_byte_buffer(crate::task::current_user_token(), 
+                                              st as *const u8, 
+                                              core::mem::size_of::<Stat>());
+        for buffer in buffers.iter_mut() {
+            let data = unsafe {core::slice::from_raw_parts(ptr as *const u8, buffer.len()) };
+            ptr += buffer.len();
+
+            buffer.copy_from_slice(data);
+        }
+
+        0
+    } else {
+        -1
+    }
 }
 
 /// YOUR JOB: Implement linkat.
-pub fn sys_linkat(_old_name: *const u8, _new_name: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_linkat NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+pub fn sys_linkat(old_name: *const u8, new_name: *const u8) -> isize {
+    // trace!(
+    //     "kernel:pid[{}] sys_linkat NOT IMPLEMENTED",
+    //     current_task().unwrap().pid.0
+    // );
+    // -1
+
+    let token = current_user_token();
+    let old_path = translated_str(token, old_name);
+    let new_path = translated_str(token, new_name);
+
+    if old_path == new_path {
+        return -1;
+    }
+
+    crate::fs::linkat(&old_path, &new_path)
 }
 
 /// YOUR JOB: Implement unlinkat.
-pub fn sys_unlinkat(_name: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_unlinkat NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+pub fn sys_unlinkat(name: *const u8) -> isize {
+    // trace!(
+    //     "kernel:pid[{}] sys_unlinkat NOT IMPLEMENTED",
+    //     current_task().unwrap().pid.0
+    // );
+    // -1
+
+    let token = current_user_token();
+    let path = translated_str(token, name);
+
+    crate::fs::unlinkat(&path)
 }
