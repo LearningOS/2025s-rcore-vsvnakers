@@ -4,6 +4,8 @@ use crate::{
     trap::{trap_handler, TrapContext},
 };
 use alloc::sync::Arc;
+use alloc::vec;
+
 /// thread create syscall
 pub fn sys_thread_create(entry: usize, arg: usize) -> isize {
     trace!(
@@ -19,6 +21,7 @@ pub fn sys_thread_create(entry: usize, arg: usize) -> isize {
     );
     let task = current_task().unwrap();
     let process = task.process.upgrade().unwrap();
+
     // create a new thread
     let new_task = Arc::new(TaskControlBlock::new(
         Arc::clone(&process),
@@ -29,18 +32,38 @@ pub fn sys_thread_create(entry: usize, arg: usize) -> isize {
             .ustack_base,
         true,
     ));
+
     // add new task to scheduler
     add_task(Arc::clone(&new_task));
+
     let new_task_inner = new_task.inner_exclusive_access();
     let new_task_res = new_task_inner.res.as_ref().unwrap();
     let new_task_tid = new_task_res.tid;
     let mut process_inner = process.inner_exclusive_access();
+    
     // add new thread to current process
-    let tasks = &mut process_inner.tasks;
-    while tasks.len() < new_task_tid + 1 {
-        tasks.push(None);
+    // let tasks = &mut process_inner.tasks;
+    // while tasks.len() < new_task_tid + 1 {
+    //     tasks.push(None);
+    // }
+    // tasks[new_task_tid] = Some(Arc::clone(&new_task));
+
+    // my code
+    // add new thread to current process
+    let mutex_len = process_inner.mutex_available.len();
+    let semaphore_len = process_inner.semaphore_available.len();
+    while process_inner.tasks.len() < new_task_tid + 1 {
+        process_inner.tasks.push(None);
+
+        process_inner.mutex_allocation.push(vec![0; mutex_len]);
+        process_inner.mutex_need.push(vec![0; mutex_len]);
+
+        process_inner.semaphore_allocation.push(vec![0; semaphore_len]);
+        process_inner.semaphore_need.push(vec![0; semaphore_len]);
     }
-    tasks[new_task_tid] = Some(Arc::clone(&new_task));
+    process_inner.tasks[new_task_tid] = Some(Arc::clone(&new_task));
+    // my code
+
     let new_task_trap_cx = new_task_inner.get_trap_cx();
     *new_task_trap_cx = TrapContext::app_init_context(
         entry,
@@ -50,6 +73,7 @@ pub fn sys_thread_create(entry: usize, arg: usize) -> isize {
         trap_handler as usize,
     );
     (*new_task_trap_cx).x[10] = arg;
+
     new_task_tid as isize
 }
 /// get current thread id syscall

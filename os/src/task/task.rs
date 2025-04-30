@@ -28,6 +28,10 @@ impl TaskControlBlock {
         let inner = process.inner_exclusive_access();
         inner.memory_set.token()
     }
+    /// get tid
+    pub fn get_tid(&self) -> usize {
+        self.inner.exclusive_access().res.as_ref().unwrap().tid
+    }
 }
 
 pub struct TaskControlBlockInner {

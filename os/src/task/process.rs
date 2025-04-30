@@ -49,6 +49,16 @@ pub struct ProcessControlBlockInner {
     pub semaphore_list: Vec<Option<Arc<Semaphore>>>,
     /// condvar list
     pub condvar_list: Vec<Option<Arc<Condvar>>>,
+
+    pub enable_deadlock_detect: bool,
+
+    pub mutex_available: Vec<usize>,
+    pub mutex_allocation: Vec<Vec<usize>>,
+    pub mutex_need: Vec<Vec<usize>>,
+
+    pub semaphore_available: Vec<usize>,
+    pub semaphore_allocation: Vec<Vec<usize>>,
+    pub semaphore_need: Vec<Vec<usize>>,
 }
 
 impl ProcessControlBlockInner {
@@ -119,6 +129,18 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+
+                    // my code
+                    enable_deadlock_detect: false,
+
+                    mutex_available: Vec::new(),
+                    mutex_allocation: Vec::new(),
+                    mutex_need: Vec::new(),
+
+                    semaphore_available: Vec::new(),
+                    semaphore_allocation: Vec::new(),
+                    semaphore_need: Vec::new(),
+                    // my code
                 })
             },
         });
@@ -144,13 +166,21 @@ impl ProcessControlBlock {
         // add main thread to the process
         let mut process_inner = process.inner_exclusive_access();
         process_inner.tasks.push(Some(Arc::clone(&task)));
+
+        // my code
+        process_inner.mutex_allocation.push(Vec::new());
+        process_inner.mutex_need.push(Vec::new());
+
+        process_inner.semaphore_allocation.push(Vec::new());
+        process_inner.semaphore_need.push(Vec::new());
+        // my code
+
         drop(process_inner);
         insert_into_pid2process(process.getpid(), Arc::clone(&process));
         // add main thread to scheduler
         add_task(task);
         process
     }
-
     /// Only support processes with a single thread.
     pub fn exec(self: &Arc<Self>, elf_data: &[u8], args: Vec<String>) {
         trace!("kernel: exec");
@@ -209,7 +239,6 @@ impl ProcessControlBlock {
         trap_cx.x[11] = argv_base;
         *task_inner.get_trap_cx() = trap_cx;
     }
-
     /// Only support processes with a single thread.
     pub fn fork(self: &Arc<Self>) -> Arc<Self> {
         trace!("kernel: fork");
@@ -245,6 +274,18 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+
+                    // my code
+                    enable_deadlock_detect: false,
+
+                    mutex_available: Vec::new(),
+                    mutex_allocation: Vec::new(),
+                    mutex_need: Vec::new(),
+
+                    semaphore_available: Vec::new(),
+                    semaphore_allocation: Vec::new(),
+                    semaphore_need: Vec::new(),
+                    // my code
                 })
             },
         });
@@ -267,6 +308,15 @@ impl ProcessControlBlock {
         // attach task to child process
         let mut child_inner = child.inner_exclusive_access();
         child_inner.tasks.push(Some(Arc::clone(&task)));
+
+        // my code
+        child_inner.mutex_allocation.push(Vec::new());
+        child_inner.mutex_need.push(Vec::new());
+
+        child_inner.semaphore_allocation.push(Vec::new());
+        child_inner.semaphore_need.push(Vec::new());
+        // my code
+
         drop(child_inner);
         // modify kstack_top in trap_cx of this thread
         let task_inner = task.inner_exclusive_access();

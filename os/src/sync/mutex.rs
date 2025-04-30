@@ -6,12 +6,20 @@ use crate::task::{block_current_and_run_next, suspend_current_and_run_next};
 use crate::task::{current_task, wakeup_task};
 use alloc::{collections::VecDeque, sync::Arc};
 
+use crate::task::current_process; // my code
+
 /// Mutex trait
 pub trait Mutex: Sync + Send {
     /// Lock the mutex
     fn lock(&self);
     /// Unlock the mutex
     fn unlock(&self);
+
+    ///
+    fn lock_with_id(&self, _mutex_id: usize);
+
+    ///
+    fn unlock_with_id(&self, _mutex_id: usize);
 }
 
 /// Spinlock Mutex struct
@@ -50,6 +58,30 @@ impl Mutex for MutexSpin {
         let mut locked = self.locked.exclusive_access();
         *locked = false;
     }
+
+    ///
+    fn lock_with_id(&self, _mutex_id: usize) {
+        trace!("kernel: MutexSpin::lock");
+        loop {
+            let mut locked = self.locked.exclusive_access();
+            if *locked {
+                drop(locked);
+                suspend_current_and_run_next();
+                continue;
+            } else {
+                *locked = true;
+                return;
+            }
+        }
+    }
+
+    ///
+    fn unlock_with_id(&self, _mutex_id: usize) {
+        trace!("kernel: MutexSpin::unlock");
+        let mut locked = self.locked.exclusive_access();
+        *locked = false;
+    }
+
 }
 
 /// Blocking Mutex struct
@@ -82,12 +114,13 @@ impl Mutex for MutexBlocking {
     fn lock(&self) {
         trace!("kernel: MutexBlocking::lock");
         let mut mutex_inner = self.inner.exclusive_access();
+
         if mutex_inner.locked {
             mutex_inner.wait_queue.push_back(current_task().unwrap());
             drop(mutex_inner);
             block_current_and_run_next();
         } else {
-            mutex_inner.locked = true;
+            mutex_inner.locked = true; // alloc res
         }
     }
 
@@ -99,6 +132,56 @@ impl Mutex for MutexBlocking {
         if let Some(waking_task) = mutex_inner.wait_queue.pop_front() {
             wakeup_task(waking_task);
         } else {
+            mutex_inner.locked = false;
+        }
+    }
+
+    fn lock_with_id(&self, _mutex_id: usize) {
+        let mut mutex_inner = self.inner.exclusive_access();
+
+        if mutex_inner.locked {
+            mutex_inner.wait_queue.push_back(current_task().unwrap());
+            drop(mutex_inner);
+            block_current_and_run_next();
+
+            let process = current_process();
+            let mut process_inner = process.inner_exclusive_access();
+            let tid = current_task().unwrap().get_tid();
+
+            process_inner.mutex_allocation[tid][_mutex_id] += 1;
+            process_inner.mutex_need[tid][_mutex_id] -= 1;
+        } else {
+            let process = current_process();
+            let mut process_inner = process.inner_exclusive_access();
+            let tid = current_task().unwrap().get_tid();
+            
+            process_inner.mutex_allocation[tid][_mutex_id] += 1;
+            process_inner.mutex_need[tid][_mutex_id] -= 1;
+
+            process_inner.mutex_available[_mutex_id] -= 1;
+            mutex_inner.locked = true; // alloc res
+        }
+    }
+
+    fn unlock_with_id(&self, _mutex_id: usize) {
+        trace!("kernel: MyMutexBlocking::unlock");
+        let mut mutex_inner = self.inner.exclusive_access();
+        assert!(mutex_inner.locked);
+
+        let process = current_process();
+        let mut process_inner = process.inner_exclusive_access();
+        let tid = current_task().unwrap().get_tid();
+
+        if let Some(waking_task) = mutex_inner.wait_queue.pop_front() {
+            process_inner.mutex_allocation[tid][_mutex_id] -= 1;
+            drop(process_inner);
+            drop(process);
+
+            wakeup_task(waking_task);
+        } else {
+            process_inner.mutex_allocation[tid][_mutex_id] -= 1;
+
+            process_inner.mutex_available[_mutex_id] += 1;
             mutex_inner.locked = false;
         }
     }
